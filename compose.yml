@@ -2,7 +2,7 @@ services:
   pgboss-dashboard:
     image: anthonylau/pgboss-dashboard:latest
     ports:
-      - "33000:3000"
+      - "3000:3000"
     environment:
       - PORT=3000
       - DATABASE_URL=postgresql://postgres:postgres@db:5432/postgres
