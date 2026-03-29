@@ -1,0 +1,109 @@
+services:
+  pgboss-dashboard:
+    image: anthonylau/pgboss-dashboard:latest
+    ports:
+      - "33000:3000"
+    environment:
+      - PORT=3000
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/postgres
+    depends_on:
+      db:
+        condition: service_healthy
+
+  pgboss-migrate:
+    image: node:24-alpine3.22
+    command: npx -y pg-boss migrate
+    environment:
+      - PGBOSS_DATABASE_URL=postgresql://postgres:postgres@db:5432/postgres
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles:
+      - migrate
+      - demo
+
+  demo-producer:
+    image: node:24-alpine3.22
+    working_dir: /app/producer
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        npm init -y && npm install pg-boss && node -e "
+        const { PgBoss } = require('pg-boss');
+        const boss = new PgBoss('postgresql://postgres:postgres@db:5432/postgres');
+        boss.on('error', console.error);
+
+        async function main() {
+          await boss.start();
+          await boss.createQueue('demo-jobs');
+          console.log('Producer started. Sending a job every 5 seconds...');
+
+          let count = 0;
+          setInterval(async () => {
+            count++;
+            const data = {
+              message: 'Hello from pg-boss demo',
+              count,
+              timestamp: new Date().toISOString()
+            };
+            const id = await boss.send('demo-jobs', data);
+            console.log('Sent job', id, JSON.stringify(data));
+          }, 1000);
+        }
+
+        main().catch(err => { console.error(err); process.exit(1); });
+        "
+    depends_on:
+      pgboss-migrate:
+        condition: service_completed_successfully
+    profiles:
+      - demo
+
+  demo-worker:
+    image: node:24-alpine3.22
+    working_dir: /app/worker
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        npm init -y && npm install pg-boss && node -e "
+        const { PgBoss } = require('pg-boss');
+        const boss = new PgBoss('postgresql://postgres:postgres@db:5432/postgres');
+        boss.on('error', console.error);
+
+        async function main() {
+          await boss.start();
+          console.log('Worker started. Waiting for jobs on demo-jobs queue...');
+
+          await boss.work('demo-jobs', { localConcurrency: 2 }, async ([job]) => {
+            console.log('Processing job', job.id, JSON.stringify(job.data));
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            if (Math.random() < 0.3) throw new Error('Random failure');
+            console.log('Completed job', job.id);
+            return { completed_at: Date.now() };
+          });
+        }
+
+        main().catch(err => { console.error(err); process.exit(1); });
+        "
+    depends_on:
+      pgboss-migrate:
+        condition: service_completed_successfully
+    profiles:
+      - demo
+
+  db:
+    image: postgres:17
+    environment:
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - "5432:5432"
+    # volumes:
+    #   - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:
