@@ -12,9 +12,9 @@ RUN npm install @pg-boss/dashboard@${PGBOSS_DASHBOARD_VERSION}
 
 FROM gcr.io/distroless/nodejs24-debian13
 
-WORKDIR /app
-COPY --from=build /app/node_modules ./node_modules
+WORKDIR /app/node_modules/@pg-boss/dashboard
+COPY --from=build /app/node_modules /app/node_modules
 
 ENV PORT=3000
 EXPOSE 3000
-CMD ["node_modules/@pg-boss/dashboard/build/server/index.js"]
+CMD ["build/server/index.js"]
