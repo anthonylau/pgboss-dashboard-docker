@@ -6,6 +6,12 @@ on:
       - main
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "npm package version of @pg-boss/dashboard (e.g., 1.0.3)"
+        required: true
+        type: string
 
 jobs:
   docker:
@@ -41,6 +47,7 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
+            type=raw,value=${{ inputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
 
       - name: Build and push
         uses: docker/build-push-action@v7
@@ -50,3 +57,5 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            PGBOSS_DASHBOARD_VERSION=${{ inputs.version || steps.meta.outputs.version }}
