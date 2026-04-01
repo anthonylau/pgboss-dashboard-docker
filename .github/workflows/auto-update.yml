@@ -1,0 +1,65 @@
+name: Auto Update
+
+on:
+  schedule:
+    # Run daily at 06:00 UTC
+    - cron: "0 6 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Check for new @pg-boss/dashboard version
+        id: check
+        run: |
+          LATEST_VERSION=$(npm view @pg-boss/dashboard dist-tags.latest)
+          echo "Latest npm version: $LATEST_VERSION"
+
+          PUBLISH_TIME=$(npm view @pg-boss/dashboard time --json | jq -r --arg v "$LATEST_VERSION" '.[$v]')
+          echo "Published at: $PUBLISH_TIME"
+
+          PUBLISH_EPOCH=$(date -d "$PUBLISH_TIME" +%s)
+          NOW_EPOCH=$(date +%s)
+          AGE_DAYS=$(( (NOW_EPOCH - PUBLISH_EPOCH) / 86400 ))
+          echo "Age in days: $AGE_DAYS"
+
+          if [ "$AGE_DAYS" -lt 3 ]; then
+            echo "Version $LATEST_VERSION is only $AGE_DAYS days old (< 3 days). Skipping."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mkdir -p /tmp/audit-check && cd /tmp/audit-check
+          npm init -y > /dev/null 2>&1
+          npm install --package-lock-only "@pg-boss/dashboard@$LATEST_VERSION" > /dev/null 2>&1
+          if ! npm audit --omit=dev 2>&1; then
+            echo "Version $LATEST_VERSION has audit vulnerabilities. Skipping."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cd -
+
+          RESPONSE_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://hub.docker.com/v2/repositories/anthonylau/pgboss-dashboard/tags/$LATEST_VERSION")
+
+          if [ "$RESPONSE_CODE" = "200" ]; then
+            echo "Version $LATEST_VERSION already exists on Docker Hub. Skipping."
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "New version $LATEST_VERSION is $AGE_DAYS days old, has no audit issues, and not on Docker Hub. Building."
+          echo "should_build=true" >> "$GITHUB_OUTPUT"
+          echo "version=$LATEST_VERSION" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ needs.check-version.outputs.version }}
+    secrets: inherit
